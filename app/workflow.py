@@ -1,4 +1,13 @@
+from typing import TypedDict
+
+from langgraph.graph import END, START, StateGraph
+
 from app.models import ProjectBrief, ProjectPlan, Task
+
+
+class ProjectState(TypedDict, total=False):
+    brief: ProjectBrief
+    plan: ProjectPlan
 
 
 def create_project_plan(brief: ProjectBrief) -> ProjectPlan:
@@ -24,7 +33,7 @@ def create_project_plan(brief: ProjectBrief) -> ProjectPlan:
         ),
         Task(
             title="Test and review",
-            description="Run tests, identify issues, and review the project against its goal.",
+            description="Run tests and review the project against its goal.",
             priority="medium",
             estimated_hours=2.0,
             dependencies=["Build the first working version"],
@@ -47,3 +56,21 @@ def create_project_plan(brief: ProjectBrief) -> ProjectPlan:
             "Technical issues may require additional research",
         ],
     )
+
+
+def planning_node(state: ProjectState) -> ProjectState:
+    brief = state["brief"]
+    plan = create_project_plan(brief)
+
+    return {"plan": plan}
+
+
+def build_workflow():
+    graph = StateGraph(ProjectState)
+
+    graph.add_node("planning", planning_node)
+
+    graph.add_edge(START, "planning")
+    graph.add_edge("planning", END)
+
+    return graph.compile()
