@@ -29,3 +29,9 @@ class ProjectPlan(BaseModel):
 
 class RiskAnalysis(BaseModel):
     risks: List[str] = Field(default_factory=list)
+
+
+class PlanReview(BaseModel):
+    approved: bool = False
+    issues: List[str] = Field(default_factory=list)
+    recommendations: List[str] = Field(default_factory=list)

@@ -3,15 +3,20 @@ from typing import TypedDict
 from langchain_ollama import ChatOllama
 from langgraph.graph import END, START, StateGraph
 
-from app.models import ProjectBrief, ProjectPlan, RiskAnalysis
+from app.models import (
+    PlanReview,
+    ProjectBrief,
+    ProjectPlan,
+    RiskAnalysis,
+)
 
 
 class ProjectState(TypedDict, total=False):
     brief: ProjectBrief
     plan: ProjectPlan
+    review: PlanReview
 
 
-# Local LLM configuration
 llm = ChatOllama(
     model="llama3.2:3b",
     temperature=0,
@@ -26,7 +31,7 @@ def planning_node(state: ProjectState) -> ProjectState:
     prompt = f"""
 You are an experienced project manager.
 
-Create a practical project plan based on the following project brief.
+Create a practical project plan based on this project brief.
 
 Project name:
 {brief.name}
@@ -43,14 +48,14 @@ Deadline:
 Constraints:
 {", ".join(brief.constraints) if brief.constraints else "None specified"}
 
-Create a realistic plan with:
+Create:
 
 - A clear project summary
 - Several milestones
 - Specific actionable tasks
 - A priority for every task
 - Estimated hours for every task
-- Dependencies between tasks when appropriate
+- Dependencies when appropriate
 - Potential project risks
 
 Keep the scope realistic for an individual developer or small team.
@@ -83,17 +88,15 @@ def risk_analysis_node(state: ProjectState) -> ProjectState:
     prompt = f"""
 You are a project risk analyst.
 
-Analyze the following project and identify realistic, specific risks.
+Identify realistic and specific risks for this project.
 
-PROJECT BRIEF
-
-Name:
+Project name:
 {brief.name}
 
-Description:
+Project description:
 {brief.description}
 
-Goal:
+Project goal:
 {brief.goal}
 
 Deadline:
@@ -102,10 +105,7 @@ Deadline:
 Constraints:
 {", ".join(brief.constraints) if brief.constraints else "None specified"}
 
-
-PROJECT PLAN
-
-Summary:
+Project summary:
 {plan.summary}
 
 Milestones:
@@ -114,7 +114,7 @@ Milestones:
 Tasks:
 {task_summary}
 
-Identify risks related to areas such as:
+Consider:
 
 - Scope
 - Schedule
@@ -126,10 +126,8 @@ Identify risks related to areas such as:
 - Deployment
 - Unclear requirements
 
-Return only practical risks that are relevant to this specific project.
-
-For each risk, write one clear sentence.
-Return between three and six risks.
+Return three to six practical risks.
+Each risk should be one clear sentence.
 """
 
     risk_analysis = structured_llm.invoke(prompt)
@@ -142,30 +140,71 @@ Return between three and six risks.
 
 
 def review_node(state: ProjectState) -> ProjectState:
+    brief = state["brief"]
     plan = state["plan"]
 
-    review_notes = []
+    structured_llm = llm.with_structured_output(PlanReview)
 
-    if not plan.project_name.strip():
-        review_notes.append("The project is missing a name.")
+    task_summary = "\n".join(
+        f"- {task.title}: {task.description}"
+        for task in plan.tasks
+    )
 
-    if not plan.summary.strip():
-        review_notes.append("The project is missing a summary.")
+    milestone_summary = "\n".join(
+        f"- {milestone}"
+        for milestone in plan.milestones
+    )
 
-    if not plan.milestones:
-        review_notes.append("The project has no milestones.")
+    risk_summary = "\n".join(
+        f"- {risk}"
+        for risk in plan.risks
+    )
 
-    if not plan.tasks:
-        review_notes.append("The project has no tasks.")
+    prompt = f"""
+You are a senior project manager reviewing a proposed project plan.
 
-    if not plan.risks:
-        review_notes.append("The project has no identified risks.")
+Review the plan for quality, realism, completeness, and consistency.
 
-    if review_notes:
-        plan.risks.extend(review_notes)
+Original project brief:
+Name: {brief.name}
+Description: {brief.description}
+Goal: {brief.goal}
+Deadline: {brief.deadline or "Not specified"}
+Constraints: {", ".join(brief.constraints) if brief.constraints else "None specified"}
+
+Project summary:
+{plan.summary}
+
+Milestones:
+{milestone_summary}
+
+Tasks:
+{task_summary}
+
+Risks:
+{risk_summary}
+
+Check for:
+
+- Missing or unclear milestones
+- Tasks that are too vague
+- Tasks that do not support the project goal
+- Unrealistic estimates
+- Missing dependencies
+- Missing risks
+- Scope that is too large
+- Conflicts with the deadline or constraints
+
+Set approved to true only if the plan is reasonably complete and usable.
+
+If there are problems, list them in issues.
+If improvements are useful but not required, list them in recommendations.
+"""
+
+    review = structured_llm.invoke(prompt)
 
     return {
-        "plan": plan
+        "review": review
     }
 
 
