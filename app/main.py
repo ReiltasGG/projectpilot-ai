@@ -1,47 +1,9 @@
+import json
+
 import streamlit as st
 
 from app.models import ProjectBrief
-from app.workflow import build_workflow
-
-
-def plan_to_markdown(plan) -> str:
-    milestones = "\n".join(
-        f"- {milestone}"
-        for milestone in plan.milestones
-    )
-
-    tasks = "\n".join(
-        f"- **{task.title}**\n"
-        f"  - Description: {task.description}\n"
-        f"  - Priority: {task.priority}\n"
-        f"  - Estimated hours: {task.estimated_hours}\n"
-        f"  - Dependencies: {', '.join(task.dependencies) or 'None'}"
-        for task in plan.tasks
-    )
-
-    risks = "\n".join(
-        f"- {risk}"
-        for risk in plan.risks
-    )
-
-    return f"""# {plan.project_name}
-
-## Summary
-
-{plan.summary}
-
-## Milestones
-
-{milestones}
-
-## Tasks
-
-{tasks}
-
-## Risks
-
-{risks}
-"""
+from app.workflow import MAX_REVISIONS, build_workflow
 
 
 st.set_page_config(
@@ -51,15 +13,80 @@ st.set_page_config(
 )
 
 
+def plan_to_markdown(plan) -> str:
+    """
+    Convert a ProjectPlan into Markdown format.
+    """
+
+    lines = [
+        f"# {plan.project_name}",
+        "",
+        "## Summary",
+        plan.summary,
+        "",
+        "## Milestones",
+    ]
+
+    for index, milestone in enumerate(plan.milestones, start=1):
+        lines.append(f"{index}. {milestone}")
+
+    lines.extend(
+        [
+            "",
+            "## Tasks",
+            "",
+        ]
+    )
+
+    for index, task in enumerate(plan.tasks, start=1):
+        lines.extend(
+            [
+                f"### {index}. {task.title}",
+                "",
+                f"**Description:** {task.description}",
+                "",
+                f"**Priority:** {task.priority}",
+                "",
+                f"**Estimated hours:** {task.estimated_hours}",
+                "",
+            ]
+        )
+
+        if task.dependencies:
+            lines.append(
+                f"**Dependencies:** {', '.join(task.dependencies)}"
+            )
+        else:
+            lines.append("**Dependencies:** None")
+
+        lines.append("")
+
+    lines.append("## Risks")
+    lines.append("")
+
+    if plan.risks:
+        for risk in plan.risks:
+            lines.append(f"- {risk}")
+    else:
+        lines.append("- No risks were identified.")
+
+    lines.append("")
+
+    return "\n".join(lines)
+
+
 st.title("🚀 ProjectPilot AI")
 
 st.write(
     "Turn a project idea into a structured project plan with "
-    "milestones, tasks, dependencies, risks, and automated review."
+    "milestones, tasks, risks, automated review, and human approval."
 )
 
 
-# Initialize session state
+# ---------------------------------------------------------
+# Session state
+# ---------------------------------------------------------
+
 if "plan" not in st.session_state:
     st.session_state.plan = None
 
@@ -69,36 +96,48 @@ if "review" not in st.session_state:
 if "approved" not in st.session_state:
     st.session_state.approved = False
 
+if "rejected" not in st.session_state:
+    st.session_state.rejected = False
+
+if "revision_count" not in st.session_state:
+    st.session_state.revision_count = 0
+
 
 # ---------------------------------------------------------
-# Project Brief
+# Project brief input
 # ---------------------------------------------------------
 
 st.header("1. Project Brief")
 
 project_name = st.text_input(
-    "Project Name",
-    placeholder="Example: Personal Portfolio Website",
+    "Project name",
+    placeholder="Example: Personal Finance Dashboard",
 )
 
 description = st.text_area(
-    "Project Description",
-    placeholder="Describe what the project is about.",
+    "Project description",
+    placeholder="Describe what you want to build.",
 )
 
 goal = st.text_area(
-    "Project Goal",
+    "Project goal",
     placeholder="What should this project accomplish?",
 )
 
 deadline = st.text_input(
     "Deadline",
-    placeholder="Example: December 2026",
+    placeholder="Example: 4 weeks, October 30, or leave blank",
 )
 
 constraints_text = st.text_area(
     "Constraints",
-    placeholder="Enter one constraint per line.",
+    placeholder=(
+        "Enter one constraint per line.\n"
+        "Example:\n"
+        "Must use Python\n"
+        "Solo developer\n"
+        "Limited budget"
+    ),
 )
 
 constraints = [
@@ -109,12 +148,14 @@ constraints = [
 
 
 # ---------------------------------------------------------
-# Generate Project Plan
+# Generate project plan
 # ---------------------------------------------------------
 
-st.header("2. Generate Project Plan")
-
-if st.button("Generate Project Plan", type="primary"):
+if st.button(
+    "Generate Project Plan",
+    type="primary",
+    use_container_width=True,
+):
     if not project_name.strip():
         st.error("Please enter a project name.")
 
@@ -136,63 +177,84 @@ if st.button("Generate Project Plan", type="primary"):
         workflow = build_workflow()
 
         with st.spinner(
-            "Generating project plan, analyzing risks, and reviewing the plan..."
+            "Creating, reviewing, and revising your project plan..."
         ):
             result = workflow.invoke(
                 {
                     "brief": brief,
+                    "revision_count": 0,
                 }
             )
 
-        st.session_state.plan = result["plan"]
+        st.session_state.plan = result.get("plan")
         st.session_state.review = result.get("review")
+        st.session_state.revision_count = result.get(
+            "revision_count",
+            0,
+        )
         st.session_state.approved = False
+        st.session_state.rejected = False
 
-        st.success("Project plan generated successfully!")
+        if st.session_state.plan is not None:
+            st.success("Project plan generated successfully.")
+        else:
+            st.error("The workflow did not return a project plan.")
 
 
 # ---------------------------------------------------------
-# Display Generated Project Plan
+# Display project plan
 # ---------------------------------------------------------
 
 if st.session_state.plan is not None:
     plan = st.session_state.plan
+    review = st.session_state.review
 
-    st.header("3. Generated Project Plan")
+    st.divider()
+    st.header("2. Generated Project Plan")
 
-    st.subheader("Project Summary")
+    st.subheader("Summary")
     st.write(plan.summary)
-
-    # -----------------------------------------------------
-    # Milestones
-    # -----------------------------------------------------
 
     st.subheader("Milestones")
 
     if plan.milestones:
-        for milestone in plan.milestones:
-            st.write(f"✅ {milestone}")
+        for index, milestone in enumerate(
+            plan.milestones,
+            start=1,
+        ):
+            st.write(f"{index}. {milestone}")
     else:
         st.info("No milestones were generated.")
-
-    # -----------------------------------------------------
-    # Tasks
-    # -----------------------------------------------------
 
     st.subheader("Tasks")
 
     if plan.tasks:
-        for index, task in enumerate(plan.tasks, start=1):
-            with st.expander(f"{index}. {task.title}"):
-                st.write(f"**Description:** {task.description}")
-                st.write(f"**Priority:** {task.priority}")
-                st.write(
-                    f"**Estimated Hours:** {task.estimated_hours}"
-                )
+        for index, task in enumerate(
+            plan.tasks,
+            start=1,
+        ):
+            with st.expander(
+                f"{index}. {task.title}",
+                expanded=False,
+            ):
+                st.write(task.description)
+
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    st.write(
+                        f"**Priority:** {task.priority}"
+                    )
+
+                with col2:
+                    st.write(
+                        f"**Estimated hours:** "
+                        f"{task.estimated_hours}"
+                    )
 
                 if task.dependencies:
                     st.write(
-                        f"**Dependencies:** "
+                        "**Dependencies:** "
                         f"{', '.join(task.dependencies)}"
                     )
                 else:
@@ -200,103 +262,190 @@ if st.session_state.plan is not None:
     else:
         st.info("No tasks were generated.")
 
-    # -----------------------------------------------------
-    # Risks
-    # -----------------------------------------------------
-
     st.subheader("Risks")
 
     if plan.risks:
         for risk in plan.risks:
             st.warning(risk)
     else:
-        st.info("No risks were identified.")
+        st.info(
+            "No risks were returned by the risk analysis step."
+        )
 
     # -----------------------------------------------------
-    # Automated Plan Review
+    # Automated revision status
     # -----------------------------------------------------
 
-    st.subheader("Automated Plan Review")
+    st.divider()
+    st.header("3. Automated Revision Status")
 
-    review = st.session_state.review
+    revision_count = st.session_state.revision_count
+
+    st.write(
+        f"Revision attempts used: "
+        f"**{revision_count} / {MAX_REVISIONS}**"
+    )
 
     if review is not None:
         if review.approved:
             st.success(
-                "The review agent found the plan reasonably complete."
+                "The automated review approved this plan. "
+                "Human approval is still required."
             )
-        else:
+
+        elif revision_count >= MAX_REVISIONS:
             st.warning(
-                "The review agent found issues with this plan."
+                "The maximum number of automated revisions has "
+                "been reached. Please review the plan manually "
+                "before approving or rejecting it."
             )
+
+        else:
+            st.info(
+                "The automated review did not approve the plan."
+            )
+    else:
+        st.warning(
+            "No automated review was returned."
+        )
+
+    # -----------------------------------------------------
+    # Automated plan review
+    # -----------------------------------------------------
+
+    st.header("4. Automated Plan Review")
+
+    if review is not None:
+        approval_text = (
+            "Approved"
+            if review.approved
+            else "Not approved"
+        )
+
+        st.write(
+            f"**Automated approval:** {approval_text}"
+        )
+
+        st.subheader("Issues")
 
         if review.issues:
-            st.write("**Issues:**")
-
             for issue in review.issues:
-                st.error(issue)
+                st.write(f"- {issue}")
+        else:
+            st.write("No issues identified.")
+
+        st.subheader("Recommendations")
 
         if review.recommendations:
-            st.write("**Recommendations:**")
-
             for recommendation in review.recommendations:
-                st.info(recommendation)
-
-        if not review.issues and not review.recommendations:
-            st.write(
-                "The review agent did not identify any additional issues "
-                "or recommendations."
-            )
-    else:
-        st.info("No automated review is available.")
-
-    # -----------------------------------------------------
-    # Human Approval
-    # -----------------------------------------------------
-
-    st.header("4. Human Approval")
-
-    if not st.session_state.approved:
-        st.write(
-            "Review the generated project plan and automated review. "
-            "Approve the plan when you are satisfied with the results."
-        )
-
-        if st.button("Approve Project Plan"):
-            st.session_state.approved = True
-            st.rerun()
+                st.write(f"- {recommendation}")
+        else:
+            st.write("No recommendations provided.")
 
     else:
-        st.success("Project plan approved by the user.")
-
-        # -------------------------------------------------
-        # JSON Export
-        # -------------------------------------------------
-
-        st.download_button(
-            label="Download Approved Plan as JSON",
-            data=plan.model_dump_json(indent=2),
-            file_name="approved_project_plan.json",
-            mime="application/json",
+        st.info(
+            "The automated review information is unavailable."
         )
 
-        # -------------------------------------------------
-        # Markdown Export
-        # -------------------------------------------------
+    # -----------------------------------------------------
+    # Human approval
+    # -----------------------------------------------------
 
-        markdown_plan = plan_to_markdown(plan)
+    st.divider()
+    st.header("5. Human Approval")
 
-        st.download_button(
-            label="Download Approved Plan as Markdown",
-            data=markdown_plan,
-            file_name="approved_project_plan.md",
-            mime="text/markdown",
+    st.write(
+        "Review the generated plan carefully. "
+        "The automated review is advisory and does not replace "
+        "your judgment."
+    )
+
+    if (
+        not st.session_state.approved
+        and not st.session_state.rejected
+    ):
+        approve_col, reject_col = st.columns(2)
+
+        with approve_col:
+            if st.button(
+                "Approve Plan",
+                type="primary",
+                use_container_width=True,
+            ):
+                st.session_state.approved = True
+                st.session_state.rejected = False
+                st.rerun()
+
+        with reject_col:
+            if st.button(
+                "Reject Plan",
+                use_container_width=True,
+            ):
+                st.session_state.approved = False
+                st.session_state.rejected = True
+                st.rerun()
+
+    elif st.session_state.approved:
+        st.success(
+            "This plan has been approved by a human."
         )
 
-        # -------------------------------------------------
-        # Revoke Approval
-        # -------------------------------------------------
-
-        if st.button("Revoke Approval"):
+        if st.button(
+            "Revoke Approval",
+            use_container_width=True,
+        ):
             st.session_state.approved = False
+            st.session_state.rejected = False
             st.rerun()
+
+    elif st.session_state.rejected:
+        st.error(
+            "This plan has been rejected."
+        )
+
+        st.write(
+            "You can generate a new plan or reconsider "
+            "this plan."
+        )
+
+        if st.button(
+            "Reconsider Plan",
+            use_container_width=True,
+        ):
+            st.session_state.rejected = False
+            st.rerun()
+
+    # -----------------------------------------------------
+    # Export options
+    # -----------------------------------------------------
+
+    if st.session_state.approved:
+        st.divider()
+        st.header("6. Export Plan")
+
+        plan_json = json.dumps(
+            plan.model_dump(),
+            indent=2,
+        )
+
+        plan_markdown = plan_to_markdown(plan)
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.download_button(
+                label="Download JSON",
+                data=plan_json,
+                file_name="project_plan.json",
+                mime="application/json",
+                use_container_width=True,
+            )
+
+        with col2:
+            st.download_button(
+                label="Download Markdown",
+                data=plan_markdown,
+                file_name="project_plan.md",
+                mime="text/markdown",
+                use_container_width=True,
+            )

@@ -11,10 +11,14 @@ from app.models import (
 )
 
 
+MAX_REVISIONS = 3
+
+
 class ProjectState(TypedDict, total=False):
     brief: ProjectBrief
     plan: ProjectPlan
     review: PlanReview
+    revision_count: int
 
 
 llm = ChatOllama(
@@ -23,201 +27,396 @@ llm = ChatOllama(
 )
 
 
+def create_basic_fallback_plan(brief: ProjectBrief) -> ProjectPlan:
+    """
+    Create a basic backup plan if the local model returns
+    an incomplete project plan.
+    """
+
+    return ProjectPlan(
+        project_name=brief.name,
+        summary=(
+            f"Create {brief.name} by breaking the project into "
+            "requirements, implementation, testing, and delivery."
+        ),
+        milestones=[
+            "Define project requirements and scope",
+            "Design the project structure",
+            "Implement the core functionality",
+            "Test and improve the project",
+            "Document and prepare the final project",
+        ],
+        tasks=[
+            {
+                "title": "Define project requirements",
+                "description": (
+                    "Document the main features, users, inputs, "
+                    "outputs, and success criteria."
+                ),
+                "priority": "high",
+                "estimated_hours": 3.0,
+                "dependencies": [],
+            },
+            {
+                "title": "Define the technical approach",
+                "description": (
+                    "Choose the project structure, technologies, "
+                    "data storage, and major components."
+                ),
+                "priority": "high",
+                "estimated_hours": 3.0,
+                "dependencies": [
+                    "Define project requirements",
+                ],
+            },
+            {
+                "title": "Implement the core functionality",
+                "description": (
+                    "Build the main features required to achieve "
+                    "the project's primary goal."
+                ),
+                "priority": "high",
+                "estimated_hours": 12.0,
+                "dependencies": [
+                    "Define the technical approach",
+                ],
+            },
+            {
+                "title": "Test the main workflows",
+                "description": (
+                    "Test the core functionality and fix important "
+                    "bugs or incorrect behavior."
+                ),
+                "priority": "high",
+                "estimated_hours": 5.0,
+                "dependencies": [
+                    "Implement the core functionality",
+                ],
+            },
+            {
+                "title": "Write project documentation",
+                "description": (
+                    "Document setup instructions, features, usage, "
+                    "limitations, and future improvements."
+                ),
+                "priority": "medium",
+                "estimated_hours": 3.0,
+                "dependencies": [
+                    "Test the main workflows",
+                ],
+            },
+        ],
+        risks=[
+            "The project scope may become larger than the available time.",
+            "Technical issues may require additional development time.",
+            "Testing and documentation may take longer than expected.",
+        ],
+    )
+
+
+def plan_is_incomplete(plan: ProjectPlan) -> bool:
+    """
+    Determine whether a plan is missing important information.
+    """
+
+    return (
+        not plan.project_name
+        or not plan.summary
+        or len(plan.milestones) == 0
+        or len(plan.tasks) == 0
+    )
+
+
 def planning_node(state: ProjectState) -> ProjectState:
+    """
+    Create the initial project plan.
+    """
+
     brief = state["brief"]
 
-    structured_llm = llm.with_structured_output(ProjectPlan)
+    planner = llm.with_structured_output(ProjectPlan)
 
-    prompt = f"""
+    plan = planner.invoke(
+        f"""
 You are an experienced project manager.
 
-Create a practical project plan based on this project brief.
+Create a complete, practical project plan from this brief.
 
 Project name:
 {brief.name}
 
-Project description:
+Description:
 {brief.description}
 
-Project goal:
+Goal:
 {brief.goal}
 
 Deadline:
 {brief.deadline or "Not specified"}
 
 Constraints:
-{", ".join(brief.constraints) if brief.constraints else "None specified"}
+{brief.constraints or "None specified"}
 
-Create:
+IMPORTANT REQUIREMENTS:
 
-- A clear project summary
-- Several milestones
-- Specific actionable tasks
-- A priority for every task
-- Estimated hours for every task
-- Dependencies when appropriate
-- Potential project risks
+- Return at least 5 milestones.
+- Return at least 5 actionable tasks.
+- Every task must have a title.
+- Every task must have a useful description.
+- Every task must have a priority.
+- Every task must have an estimated number of hours.
+- Include dependencies when appropriate.
+- Include at least 3 specific risks.
+- Do not leave milestones or tasks empty.
+- Do not return a partial plan.
 
-Keep the scope realistic for an individual developer or small team.
-Avoid vague tasks.
+The plan should be realistic for the deadline and constraints.
 """
+    )
 
-    plan = structured_llm.invoke(prompt)
+    if plan_is_incomplete(plan):
+        plan = create_basic_fallback_plan(brief)
 
     return {
-        "plan": plan
+        "plan": plan,
+        "revision_count": state.get("revision_count", 0),
     }
 
 
 def risk_analysis_node(state: ProjectState) -> ProjectState:
+    """
+    Analyze the current plan and identify risks.
+    """
+
     brief = state["brief"]
     plan = state["plan"]
 
-    structured_llm = llm.with_structured_output(RiskAnalysis)
+    risk_analyzer = llm.with_structured_output(RiskAnalysis)
 
-    task_summary = "\n".join(
-        f"- {task.title}: {task.description}"
-        for task in plan.tasks
-    )
-
-    milestone_summary = "\n".join(
-        f"- {milestone}"
-        for milestone in plan.milestones
-    )
-
-    prompt = f"""
+    risk_result = risk_analyzer.invoke(
+        f"""
 You are a project risk analyst.
 
-Identify realistic and specific risks for this project.
+Project brief:
 
-Project name:
-{brief.name}
+{brief.model_dump_json(indent=2)}
 
-Project description:
-{brief.description}
+Project plan:
 
-Project goal:
-{brief.goal}
+{plan.model_dump_json(indent=2)}
 
-Deadline:
-{brief.deadline or "Not specified"}
-
-Constraints:
-{", ".join(brief.constraints) if brief.constraints else "None specified"}
-
-Project summary:
-{plan.summary}
-
-Milestones:
-{milestone_summary}
-
-Tasks:
-{task_summary}
+Identify 3 to 6 specific risks related to this project.
 
 Consider:
 
-- Scope
-- Schedule
-- Technical complexity
-- Dependencies
-- Resources
-- Security
-- Testing
-- Deployment
+- Deadline risk
+- Scope risk
+- Technical risk
+- Resource risk
+- Dependency risk
+- Quality risk
 - Unclear requirements
+- Project constraints
 
-Return three to six practical risks.
-Each risk should be one clear sentence.
+Do not return an empty list.
+Do not use generic wording when a project-specific risk can be identified.
 """
+    )
 
-    risk_analysis = structured_llm.invoke(prompt)
+    risks = risk_result.risks
 
-    plan.risks = risk_analysis.risks
+    if not risks:
+        risks = [
+            "The project scope may become larger than the available time.",
+            "Technical issues may require additional development time.",
+            "Testing and documentation may take longer than expected.",
+        ]
+
+    updated_plan = plan.model_copy(
+        update={
+            "risks": risks,
+        }
+    )
 
     return {
-        "plan": plan
+        "plan": updated_plan,
     }
 
 
 def review_node(state: ProjectState) -> ProjectState:
+    """
+    Review the current project plan.
+    """
+
     brief = state["brief"]
     plan = state["plan"]
 
-    structured_llm = llm.with_structured_output(PlanReview)
+    reviewer = llm.with_structured_output(PlanReview)
 
-    task_summary = "\n".join(
-        f"- {task.title}: {task.description}"
-        for task in plan.tasks
-    )
+    review = reviewer.invoke(
+        f"""
+You are a senior project manager reviewing a project plan.
 
-    milestone_summary = "\n".join(
-        f"- {milestone}"
-        for milestone in plan.milestones
-    )
+Project brief:
 
-    risk_summary = "\n".join(
-        f"- {risk}"
-        for risk in plan.risks
-    )
+{brief.model_dump_json(indent=2)}
 
-    prompt = f"""
-You are a senior project manager reviewing a proposed project plan.
+Project plan:
 
-Review the plan for quality, realism, completeness, and consistency.
+{plan.model_dump_json(indent=2)}
 
-Original project brief:
-Name: {brief.name}
-Description: {brief.description}
-Goal: {brief.goal}
-Deadline: {brief.deadline or "Not specified"}
-Constraints: {", ".join(brief.constraints) if brief.constraints else "None specified"}
+Review the plan for:
 
-Project summary:
-{plan.summary}
+1. Completeness
+2. Realistic milestones
+3. Actionable tasks
+4. Clear priorities
+5. Reasonable time estimates
+6. Logical dependencies
+7. Alignment with the project goal
+8. Respect for constraints
+9. Specific risks
+10. Deadline feasibility
 
-Milestones:
-{milestone_summary}
+Approve the plan if it is reasonably clear, actionable, and realistic.
 
-Tasks:
-{task_summary}
+Only reject the plan for meaningful problems.
+Do not reject the plan for minor wording preferences.
 
-Risks:
-{risk_summary}
+If approved:
+- Set approved to true.
+- Issues may be empty.
+- Recommendations may contain optional future improvements.
 
-Check for:
-
-- Missing or unclear milestones
-- Tasks that are too vague
-- Tasks that do not support the project goal
-- Unrealistic estimates
-- Missing dependencies
-- Missing risks
-- Scope that is too large
-- Conflicts with the deadline or constraints
-
-Set approved to true only if the plan is reasonably complete and usable.
-
-If there are problems, list them in issues.
-If improvements are useful but not required, list them in recommendations.
+If not approved:
+- Set approved to false.
+- List specific issues.
+- List practical recommendations for fixing those issues.
 """
+    )
 
-    review = structured_llm.invoke(prompt)
+    if not review.approved and not review.recommendations:
+        review = review.model_copy(
+            update={
+                "recommendations": [
+                    "Review the milestones and tasks for completeness.",
+                    "Confirm that the estimated hours fit the deadline.",
+                    "Check that the project constraints are reflected in the plan.",
+                ]
+            }
+        )
 
     return {
-        "review": review
+        "review": review,
     }
 
 
+def revision_node(state: ProjectState) -> ProjectState:
+    """
+    Revise the plan based on review feedback.
+    """
+
+    brief = state["brief"]
+    current_plan = state["plan"]
+    review = state["review"]
+
+    current_revision_count = state.get("revision_count", 0)
+    next_revision_count = current_revision_count + 1
+
+    reviser = llm.with_structured_output(ProjectPlan)
+
+    revised_plan = reviser.invoke(
+        f"""
+You are an experienced project manager revising a project plan.
+
+Project brief:
+
+{brief.model_dump_json(indent=2)}
+
+Current project plan:
+
+{current_plan.model_dump_json(indent=2)}
+
+Review issues:
+
+{review.issues}
+
+Review recommendations:
+
+{review.recommendations}
+
+Create a complete revised project plan.
+
+IMPORTANT REQUIREMENTS:
+
+- Return the complete plan, not a partial plan.
+- Preserve the existing project name.
+- Preserve the useful summary.
+- Include at least 5 milestones.
+- Include at least 5 actionable tasks.
+- Every task needs a title.
+- Every task needs a description.
+- Every task needs a priority.
+- Every task needs an estimated number of hours.
+- Include dependencies where appropriate.
+- Include at least 3 risks.
+- Do not return empty milestones or tasks.
+- Address the review issues and recommendations.
+"""
+    )
+
+    # Do not allow an incomplete revision to destroy a usable plan.
+    if plan_is_incomplete(revised_plan):
+        revised_plan = current_plan
+
+    return {
+        "plan": revised_plan,
+        "revision_count": next_revision_count,
+    }
+
+
+def route_after_review(state: ProjectState) -> str:
+    """
+    Decide whether to finish or perform another revision.
+    """
+
+    review = state.get("review")
+    revision_count = state.get("revision_count", 0)
+
+    if review and review.approved:
+        return "finish"
+
+    if revision_count >= MAX_REVISIONS:
+        return "finish"
+
+    return "revise"
+
+
 def build_workflow():
+    """
+    Build and compile the ProjectPilot AI workflow.
+    """
+
     workflow = StateGraph(ProjectState)
 
     workflow.add_node("planning", planning_node)
     workflow.add_node("risk_analysis", risk_analysis_node)
     workflow.add_node("review", review_node)
+    workflow.add_node("revision", revision_node)
 
     workflow.add_edge(START, "planning")
     workflow.add_edge("planning", "risk_analysis")
     workflow.add_edge("risk_analysis", "review")
-    workflow.add_edge("review", END)
+
+    workflow.add_conditional_edges(
+        "review",
+        route_after_review,
+        {
+            "revise": "revision",
+            "finish": END,
+        },
+    )
+
+    workflow.add_edge("revision", "risk_analysis")
 
     return workflow.compile()
