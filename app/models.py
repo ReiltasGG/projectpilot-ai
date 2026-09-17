@@ -1,4 +1,5 @@
 from typing import List, Optional
+
 from pydantic import BaseModel, Field
 
 
@@ -23,4 +24,8 @@ class ProjectPlan(BaseModel):
     summary: str
     milestones: List[str] = Field(default_factory=list)
     tasks: List[Task] = Field(default_factory=list)
+    risks: List[str] = Field(default_factory=list)
+
+
+class RiskAnalysis(BaseModel):
     risks: List[str] = Field(default_factory=list)
