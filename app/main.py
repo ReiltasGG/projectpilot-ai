@@ -176,29 +176,39 @@ if st.button(
 
         workflow = build_workflow()
 
-        with st.spinner(
-            "Creating, reviewing, and revising your project plan..."
-        ):
-            result = workflow.invoke(
-                {
-                    "brief": brief,
-                    "revision_count": 0,
-                }
+        try:
+            with st.spinner(
+                "Creating, reviewing, and revising your project plan..."
+            ):
+                result = workflow.invoke(
+                    {
+                        "brief": brief,
+                        "revision_count": 0,
+                    }
+                )
+
+        except RuntimeError as error:
+            st.error(
+                "The local LLM could not generate a plan. "
+                "Make sure Ollama is running and the "
+                "llama3.2:3b model is pulled, then try again.\n\n"
+                f"Details: {error}"
             )
 
-        st.session_state.plan = result.get("plan")
-        st.session_state.review = result.get("review")
-        st.session_state.revision_count = result.get(
-            "revision_count",
-            0,
-        )
-        st.session_state.approved = False
-        st.session_state.rejected = False
-
-        if st.session_state.plan is not None:
-            st.success("Project plan generated successfully.")
         else:
-            st.error("The workflow did not return a project plan.")
+            st.session_state.plan = result.get("plan")
+            st.session_state.review = result.get("review")
+            st.session_state.revision_count = result.get(
+                "revision_count",
+                0,
+            )
+            st.session_state.approved = False
+            st.session_state.rejected = False
+
+            if st.session_state.plan is not None:
+                st.success("Project plan generated successfully.")
+            else:
+                st.error("The workflow did not return a project plan.")
 
 
 # ---------------------------------------------------------

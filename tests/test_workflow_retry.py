@@ -1,3 +1,5 @@
+import pytest
+
 from app.workflow import (
     MAX_LLM_RETRIES,
     invoke_structured_with_retry,
@@ -90,17 +92,15 @@ def test_retry_raises_after_all_attempts_fail():
         failures_before_success=MAX_LLM_RETRIES + 1
     )
 
-    try:
+    with pytest.raises(
+        RuntimeError,
+        match="failed to return valid structured data",
+    ):
         invoke_structured_with_retry(
             output_model=dict,
             prompt="Test prompt",
             model=fake_model,
         )
-
-        assert False, "Expected RuntimeError was not raised"
-
-    except RuntimeError as error:
-        assert "failed to return valid structured data" in str(error)
 
     expected_attempts = MAX_LLM_RETRIES + 1
     assert fake_model.invoke_count == expected_attempts
