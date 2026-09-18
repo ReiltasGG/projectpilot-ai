@@ -1,3 +1,4 @@
+
 from typing import TypedDict
 
 from langchain_ollama import ChatOllama
@@ -12,6 +13,7 @@ from app.models import (
 
 
 MAX_REVISIONS = 3
+MAX_LLM_RETRIES = 2
 
 
 class ProjectState(TypedDict, total=False):
@@ -25,6 +27,45 @@ llm = ChatOllama(
     model="llama3.2:3b",
     temperature=0,
 )
+
+
+def invoke_structured_with_retry(
+    output_model,
+    prompt: str,
+    model=None,
+):
+    """
+    Invoke the LLM with structured output.
+
+    Retry if the model returns invalid structured data
+    or the structured-output call raises an exception.
+
+    The model parameter allows tests to inject a fake LLM
+    without requiring Ollama to be running.
+    """
+
+    if model is None:
+        model = llm
+
+    last_error = None
+
+    for attempt in range(MAX_LLM_RETRIES + 1):
+        try:
+            structured_llm = model.with_structured_output(
+                output_model
+            )
+
+            return structured_llm.invoke(prompt)
+
+        except Exception as error:
+            last_error = error
+
+            if attempt >= MAX_LLM_RETRIES:
+                raise RuntimeError(
+                    "The local LLM failed to return valid "
+                    "structured data after "
+                    f"{MAX_LLM_RETRIES + 1} attempts."
+                ) from last_error
 
 
 def create_basic_fallback_plan(brief: ProjectBrief) -> ProjectPlan:
@@ -134,9 +175,8 @@ def planning_node(state: ProjectState) -> ProjectState:
 
     brief = state["brief"]
 
-    planner = llm.with_structured_output(ProjectPlan)
-
-    plan = planner.invoke(
+    plan = invoke_structured_with_retry(
+        ProjectPlan,
         f"""
 You are an experienced project manager.
 
@@ -171,7 +211,7 @@ IMPORTANT REQUIREMENTS:
 - Do not return a partial plan.
 
 The plan should be realistic for the deadline and constraints.
-"""
+""",
     )
 
     if plan_is_incomplete(plan):
@@ -191,9 +231,8 @@ def risk_analysis_node(state: ProjectState) -> ProjectState:
     brief = state["brief"]
     plan = state["plan"]
 
-    risk_analyzer = llm.with_structured_output(RiskAnalysis)
-
-    risk_result = risk_analyzer.invoke(
+    risk_result = invoke_structured_with_retry(
+        RiskAnalysis,
         f"""
 You are a project risk analyst.
 
@@ -220,7 +259,7 @@ Consider:
 
 Do not return an empty list.
 Do not use generic wording when a project-specific risk can be identified.
-"""
+""",
     )
 
     risks = risk_result.risks
@@ -251,9 +290,8 @@ def review_node(state: ProjectState) -> ProjectState:
     brief = state["brief"]
     plan = state["plan"]
 
-    reviewer = llm.with_structured_output(PlanReview)
-
-    review = reviewer.invoke(
+    review = invoke_structured_with_retry(
+        PlanReview,
         f"""
 You are a senior project manager reviewing a project plan.
 
@@ -292,7 +330,7 @@ If not approved:
 - Set approved to false.
 - List specific issues.
 - List practical recommendations for fixing those issues.
-"""
+""",
     )
 
     if not review.approved and not review.recommendations:
@@ -323,9 +361,8 @@ def revision_node(state: ProjectState) -> ProjectState:
     current_revision_count = state.get("revision_count", 0)
     next_revision_count = current_revision_count + 1
 
-    reviser = llm.with_structured_output(ProjectPlan)
-
-    revised_plan = reviser.invoke(
+    revised_plan = invoke_structured_with_retry(
+        ProjectPlan,
         f"""
 You are an experienced project manager revising a project plan.
 
@@ -362,7 +399,7 @@ IMPORTANT REQUIREMENTS:
 - Include at least 3 risks.
 - Do not return empty milestones or tasks.
 - Address the review issues and recommendations.
-"""
+""",
     )
 
     # Do not allow an incomplete revision to destroy a usable plan.
