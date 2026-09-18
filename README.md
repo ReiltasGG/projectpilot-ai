@@ -205,46 +205,6 @@ Initial attempt + 2 retries = 3 total attempts
 
 If all attempts fail, the helper raises a clear runtime error.
 
-## Project limitations
-
-The current version is intended as a local prototype.
-
-Known limitations include:
-
-* The application depends on a locally running Ollama model.
-* Generated plans depend on the quality of the model response.
-* The current retry handling catches model invocation errors but does not independently evaluate every possible semantic problem in a valid response.
-* The application does not currently persist projects in a database.
-* There is no authentication or multi-user project workspace.
-* The current workflow uses a fixed Ollama model configuration.
-
-## Development workflow
-
-Run the Streamlit app:
-
-```bash
-PYTHONPATH=. python -m streamlit run app/main.py
-```
-
-Run the tests:
-
-```bash
-PYTHONPATH=. python -m pytest -v
-```
-
-Check the current Git status:
-
-```bash
-git status
-```
-
-Commit changes:
-
-```bash
-git add .
-git commit -m "Describe the change"
-git push origin main
-```
 
 ## Technology
 
